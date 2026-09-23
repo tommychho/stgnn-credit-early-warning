@@ -1,41 +1,33 @@
-"""Detection-rate and lead-time metrics: ONE definition, shared by every notebook.
+"""Detection rate and lead time: one definition, used everywhere in this release.
 
-Why this module exists
-----------------------
-The event anchor, the persistence rule and the DR/LT computation were implemented
-separately in four places: ``notebooks/03_baseline_comparison.ipynb`` [Cell 24],
-``notebooks/04_early_warning_evaluation.ipynb`` [Cell 2],
-``notebooks/06_explainability.ipynb`` [Cell 2] and ``code_release/evaluate.py``.
-All four carried the same defect, and a fifth copy would have carried it too. See
-``markdowns/EVENT_ANCHOR_DEFECT.md``.
+Two choices decide what a detection rate means in operational early warning, and both
+are parameters here rather than assumptions baked into a call site.
 
-The anchor defect
------------------
+The event anchor
+----------------
 ``company.y`` is ``has_default_in_window(t, horizon, freq='W')``, so ``y == 1`` marks
-*every* snapshot within roughly 52 weeks before a default, not the default itself. The
-notebooks anchored the event at the FIRST ``y == 1`` snapshot, which is approximately
-``default - 52 weeks``. Measured gap between that anchor and the last ``y == 1``
-snapshot: median 37 weeks, mean 46.6.
+*every* snapshot in roughly the 52 weeks before a default, not the default itself.
+Anchoring the event at the first ``y == 1`` snapshot therefore measures lead time to
+label onset, about a year early, and it leaves 44 of the 88 test-window defaulters with
+their anchor pinned to the first scoreable snapshot and no lookback behind it. Those
+firms are undetectable by any model, so the metric is capped at 50% before any
+comparison begins. Anchoring on the default date removes the cap.
 
-Two consequences:
+``mode='label_onset'`` reproduces the earlier protocol; ``mode='default'`` is what the
+paper reports. Both are kept so that comparing them is a parameter change rather than a
+re-implementation, which is what makes the comparison trustworthy.
 
-1. Lead time measured weeks to *label onset*, not to the default, while both papers
-   state it is "the weeks from first detection to the default date".
-2. 43 of 88 test-window defaulters had their anchor pinned to the first test snapshot
-   (2020-01-03) with an empty lookback, making them undetectable by any model and
-   capping DR at 50.0%.
+The threshold
+-------------
+``capacity_threshold`` fixes the review budget: the operating threshold is the
+``(1 - capacity)`` quantile of the pooled score distribution, so alerts consume a fixed
+share of firm-weeks and the budget is identical across models. ``recall_threshold``
+fixes recall instead and lets the alert rate float, which is the confounded rule the
+paper reports on: under it a uniform random scorer reaches 47.6% detection on this
+panel.
 
-Correcting the anchor moves DR from about 14% to about 76% and the ceiling from 50.0%
-to 95.5%.
-
-Modes
------
-``mode='label_onset'`` reproduces every published number exactly. Keep it: a disclosed
-correction is only verifiable if the original can still be regenerated.
-``mode='default'`` is correct and is what the papers claim to measure.
-
-Both are provided so old-versus-new is a parameter change rather than a
-re-implementation, which makes the comparison trustworthy by construction.
+Always read ``dr_pct`` next to ``n_reachable``. Detection is capped by the persistence
+rule and the anchor, not by 100%, and ``reachable_defaulters`` reports that ceiling.
 """
 
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple

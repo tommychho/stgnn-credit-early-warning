@@ -74,7 +74,7 @@ def compute_ndr_lookup(train_graphs) -> dict:
     NDR_i = (# of firm i's company->company neighbours that defaulted) /
             (# of firm i's company->company neighbour edges), summed over all
             training snapshots. Returns {company_id: NDR}. Firms never seen as a
-            source default to 0 at lookup time. Mirrors nb03 Cell 10b-def.
+            source default to 0 at lookup time.
     """
     from collections import defaultdict
     counts = defaultdict(lambda: [0, 0])   # gvkey -> [defaulted_neighbours, total_neighbours]

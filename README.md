@@ -93,10 +93,12 @@ The embargo is necessary because the label looks 52 weeks forward. A validation 
 | Mod 2b | Sector Attention Fusion [SAF variant] | h_fused in R^128 |
 | Mod 3 | Network systematic pool (4 channels) | m_loc in R^4 |
 | Mod 4 | GATv2 (2 layers, 4 heads, 64 hidden) | h_GNN in R^64 |
-| Mod 5 [proposed] | GRS: gated residual bypass, learnable gate per node | h_i in R^64 |
+| Mod 5 | GRS: gated residual bypass, gate learned per node | h_i in R^64 |
 | Mod 6 | Classifier trunk [h_i ; m_loc] in R^68 | PD(1q/2q/4q) |
 
 The gated residual is element-wise and preserves width, so the classifier trunk is 68 for every reported variant and classifier capacity cannot confound the comparison between them.
+
+GRS was the architectural proposal of the submitted version: a per-node gate intended to route isolated firms around neighbourhood aggregation. It is described here as specified, not as trained. Under the optimiser used, the gate was regularised into a firm-independent constant and did no routing, so this table is a description of the design rather than a claim about it.
 
 **What the audit found.** Under coupled L2 decay through Adam, the GATv2 branch does not train: 98.9% of its convolution weights reach denormal magnitudes and the LayerNorm scale downstream trains to exactly zero, in all fifteen reported checkpoints. Zeroing the convolutions in a trained checkpoint changes average precision by +0.0000. `training/optim.py` provides the decoupled-decay repair; on a revived branch, deleting the convolutions changes AP by +0.0090 with a standard deviation of 0.0164 across seeds, an interval spanning zero.
 

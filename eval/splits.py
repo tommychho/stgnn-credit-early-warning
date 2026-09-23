@@ -1,61 +1,41 @@
-"""Train/validation/test split construction: ONE definition, shared by every notebook.
+"""Chronological train / validation / test splits, with the embargo the paper uses.
 
-Why this module exists
-----------------------
-The published split has no embargo. Validation ends 2019-12-27 and the test window opens
-2019-01-03, while ``company.y`` is ``has_default_in_window(t, 52w)``. A firm defaulting in
-early 2020 therefore carries ``y == 1`` on validation snapshots, and those labels were
-visible to early stopping and to threshold calibration.
+Why an embargo is needed
+------------------------
+``company.y`` is ``has_default_in_window(t, 52w)``, so a label is positive for the whole
+year preceding a default. A validation window that ends where the test window opens
+therefore carries positive labels for firms that default *after* the boundary, and those
+labels are visible to early stopping and to threshold calibration.
 
-Measured on this panel (``nb08 [Cell V10]``): **1,030 of 3,059 positive validation
-firm-snapshots, 33.7%, belong to firms defaulting on or after the test boundary**, across
-35 distinct firms. 35 of the 96 panel firms defaulting in the test period were already
-carrying positive labels while the model was being selected.
+Measured on this panel: **1,030 of 3,059 positive validation firm-snapshots, 33.7%,
+belong to firms defaulting on or after the test boundary**, across 35 distinct firms.
+Retraining showed the leak was visible but not exploited, in that a leak-free arm at
+matched validation strength scores no worse. A primary split should nonetheless not
+carry a known defect.
 
-Retraining showed the leak was *visible but not exploited* (``ARCHITECTURE_EXPERIMENT.md``
-§15.2a): at matched validation strength the leak-free arm scores no worse. The primary
-split should nonetheless not carry a known defect, which is what ``shifted_split`` fixes.
-
-Truncate or shift?
-------------------
+Truncate or shift
+-----------------
 Two remedies remove the leak and they are not equivalent.
 
-``truncate``  cut the last ``horizon`` snapshots off validation. Removes the leak, but pays
-              for it out of the validation set: 156 snapshots to 104, and 3,059 positives to
-              1,351. Test AP falls by roughly 0.11, and a size control shows **most of that
-              fall is the shrinkage, not the leak**.
+``truncate``  cut the last ``horizon`` snapshots off validation. Removes the leak but
+              pays for it out of validation: 156 snapshots to 104, and 3,059 positives
+              to 1,351. Test AP falls by roughly 0.11, and a size control shows most of
+              that fall is the shrinkage rather than the leak.
 
-``shift``     slide the whole validation window back one ``horizon`` and pay out of TRAINING
-              data instead: 835 training snapshots to 783, a 6.2% reduction, with validation
-              kept at full length. This is the remedy to use.
+``shift``     slide the whole validation window back one ``horizon`` and pay out of
+              TRAINING data instead: 835 training snapshots to 783, a 6.2% reduction,
+              with validation kept at full length. This is the split the paper reports.
 
-    published : train 0..834 (835) | val 835..990 (156) | test 991..   val ends where test starts
-    shifted   : train 0..782 (783) | val 783..938 (156) | test 991..   52w gap, validation intact
+    unembargoed : train 0..834 (835) | val 835..990 (156) | validation ends at the test boundary
+    embargoed   : train 0..782 (783) | val 783..938 (156) | 52-week gap, validation intact
 
-THE LANDMINE
-------------
-``run_split`` in the notebooks **ignores its ``graphs`` argument except for
-``len(graphs)``**. It iterates ``all_graphs[start_idx : start_idx + len(graphs)]``. So:
+Both are provided so the choice is inspectable rather than implicit.
 
-* a non-contiguous subsample is silently replaced by a contiguous block, and the cell
-  reports a different experiment than the one it describes;
-* rebinding ``val_graphs`` without also rebinding ``val_start`` scores the wrong snapshots.
-
-This cost one rewrite already: the first version of the size control in
-``nb03 [Cell 12embC]`` would have re-run the embargoed arm and labelled it the control.
-Every function here therefore returns ``start_idx`` alongside the list, and callers must
-move both together. :func:`assert_contiguous` checks it.
-
-Usage
------
-    import src.eval.splits as splits
-    spec = splits.shifted_split(all_graphs, len(train_graphs), len(val_graphs))
-    splits.assert_contiguous(all_graphs, spec)
-    n = splits.audit_leak(all_graphs, spec, gvkey_to_defdate, cid_to_gvkey)   # must be 0
-    # gvkey_to_defdate must be the FULL history, not a map filtered to the test period.
-
-    train_graphs, train_start = spec.train, spec.train_start
-    val_graphs,   val_start   = spec.val,   spec.val_start
+Keeping the index and the list together
+---------------------------------------
+Every function here returns ``start_idx`` alongside the snapshot list, and callers must
+move both together: rebinding a window without rebinding its start index scores the
+wrong snapshots, silently and plausibly. :func:`assert_contiguous` checks the invariant.
 """
 
 from typing import Dict, List, NamedTuple, Optional, Sequence

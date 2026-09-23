@@ -1,42 +1,38 @@
 """Optimiser construction with correct weight-decay handling.
 
-Single definition, shared by every training loop in the project.
-
 Why this module exists
 ----------------------
-The coupled-L2 pattern ``torch.optim.Adam(model.parameters(), weight_decay=wd)``
-appeared independently in at least six places: ``TemporalTrainer.__init__``,
-four optimiser sites in ``notebooks/03_baseline_comparison.ipynb`` (including
-``train_variant``, which produced every baseline checkpoint reported in Table I),
-and ``code_release/training/trainer.py``. Fixing them one at a time guarantees
-they drift apart again, which is exactly how two evaluation defects survived a
-year in this project.
+The pattern ``torch.optim.Adam(model.parameters(), weight_decay=wd)`` is easy to write
+and, in a gated architecture, can silently disable one branch of the model. Two things
+go wrong with it.
 
-Two problems with that pattern
-------------------------------
-1. ``Adam`` adds the decay term to the gradient *before* adaptive scaling, so
-   for a parameter whose task gradient is small the decay dominates the
-   numerator and every step becomes a near-constant push toward zero.
-   ``AdamW`` decouples it, applying decay directly to the weights instead.
+1. ``Adam`` adds the decay term to the gradient *before* adaptive scaling, so for a
+   parameter whose task gradient is small the decay dominates the numerator and every
+   step becomes a near-constant push toward zero. ``AdamW`` decouples it, applying decay
+   to the weights directly.
 
-2. It decays LayerNorm scales and biases, which should never be decayed.
+2. It decays LayerNorm scales and biases, which should not be decayed at all.
 
-Measured consequence, from ``notebooks/07_architecture_forensics.ipynb``
-[Cell D1], on the ST-GNN + GRS checkpoints:
+What that did to the checkpoints reported in the paper
+------------------------------------------------------
+Measured on the ST-GNN + GRS checkpoints:
 
-===========================  ==============  =========================
+===========================  ==============  =================================
 parameter group              at init         after training
-===========================  ==============  =========================
+===========================  ==============  =================================
 LayerNorm gamma              exactly 1.0     rms 0.0018-0.0050, 58-62% denormal
 GATv2 convolutions           std/init 1.0    std/init 0.0000, 98.9% denormal
 proj (h_init, unnormalised)  std/init 1.0    std/init 0.30
-===========================  ==============  =========================
+===========================  ==============  =================================
 
-The gamma collapse zeroes the message-passing branch output regardless of the
-convolution weights; the convolutions, starved of gradient in consequence,
-decay to denormal. [Cell D2] confirms the endpoint: zeroing every convolution
-changes average precision by +0.0000 to +0.0007 with Spearman +1.0000, i.e. the
-graph pathway is inert at inference.
+The gamma collapse zeroes the message-passing branch output regardless of what the
+convolutions hold; the convolutions, starved of gradient in consequence, decay to
+denormal. Zeroing every convolution in a trained checkpoint then changes average
+precision by +0.0000 with a Spearman correlation of +1.0000: the graph pathway is inert
+at inference.
+
+``audit_checkpoint.py`` in the repository root checks a saved model for this, needing
+neither data nor a GPU. Run it before trusting any ablation that involves a branch.
 """
 
 from typing import Iterable, List, Tuple

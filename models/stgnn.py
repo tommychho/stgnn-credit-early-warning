@@ -3,7 +3,7 @@
 SectorAttentionFusion    -- Mod 2b sector gate (SAF variant)
 HeteroEdgeModel          -- Mod 4 GATv2 + Mod 6 Classifier
 NetworkSystematicModule  -- Mod 3 network systemic risk pool
-SpatioTemporalGNN        -- Full proposed architecture (base / SAF / GRS variants)
+SpatioTemporalGNN        -- Full architecture (base / SAF / GRS variants)
 """
 
 import torch
@@ -640,7 +640,9 @@ class SpatioTemporalGNN(nn.Module):
         self.net_sys = NetworkSystematicModule(in_channels=lstm_hidden)
 
         # Module 4 - GATv2: input is firm embedding only (M_local bypasses as residual path)
-        # Module 5 - GRS bypass gate [*Proposed]: learnable per-node gate after GATv2
+        # Module 5 - GRS bypass gate: per-node gate after GATv2. As SPECIFIED it routes
+        # isolated firms around aggregation; as TRAINED under coupled decay it collapsed
+        # to a constant and did no routing. See audit_checkpoint.py.
         # Module 6 - Classifier trunk: receives [GATv2 output || M_local] = [hidden + 4]
         self.gnn = HeteroEdgeModel(
             metadata=metadata,

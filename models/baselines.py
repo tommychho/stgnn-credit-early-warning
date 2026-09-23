@@ -1,4 +1,4 @@
-"""Baseline and ablation models used in the paper (Table I).
+"""Baseline and ablation models used in the paper.
 
 LSTMOnly          -- Sequential baseline (no graph)
 GATv2Only         -- Static attention snapshot proxy (no LSTM)

@@ -308,7 +308,7 @@ def run_inference(
     # The 52-bin survival head (head_surv -> phi) is only meaningful if the DeepHit
     # 52-bin objective actually trained it. TemporalTrainer._loss uses _deephit_loss(phi)
     # only when per-bin labels (y_bin, y_event) are available; the baseline checkpoints
-    # reported in Table I are trained through _survival_loss(logits [N,3]) instead, which
+    # reported in the paper are trained through _survival_loss(logits [N,3]) instead, which
     # never touches head_surv. Those checkpoints keep head_surv at initialisation
     # (bias == -8.0 constant, see nn.init.constant_ in the model definition), so scoring
     # phi there reads a fixed random projection of the classifier trunk rather than a

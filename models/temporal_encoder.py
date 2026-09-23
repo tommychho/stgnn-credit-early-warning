@@ -3,7 +3,7 @@ Temporal Encoder Module (LSTM)
 Encodes a borrower's T-month financial trajectory into a fixed-size embedding.
 
 This implements the temporal component of the Spatiotemporal GNN architecture
-(Research Gap 1 / RQ2 from the thesis proposal). The LSTM learns sequential
+The LSTM learns sequential
 deterioration patterns like:
 - Gradual rating decline over 6+ months
 - Sudden downgrade spikes before default

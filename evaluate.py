@@ -246,39 +246,52 @@ def apply_persistence_filter(
 # Per-firm inference
 # -----------------------------------------------------------------------
 
-def run_tabular_inference(tabular_model, model_name: str, all_graphs, test_start: int):
-    """Score test snapshots with a tabular or survival model.
+def run_tabular_inference(tabular_model, model_name: str, all_graphs,
+                          test_start: int, snap_idx=None):
+    """Score snapshots with a tabular or survival model.
 
-    Uses each node's current-snapshot feature vector (x_dict['company']).
-    Returns the same (firm_data, results) structure as run_inference so the
-    downstream persistence filter and metric computation are unchanged.
+    Uses each node's current-snapshot feature vector. Returns the same
+    ``(firm_data, results)`` structure as :func:`run_inference`, including the
+    per-firm score series, so the trees go through exactly the same detection
+    rule as the sequence models. Without that series a tree baseline has no
+    detection rate at all, only an AP.
     """
     from train import extract_flat_features  # reuse feature extractor
-    test_graphs = all_graphs[test_start:]
-    X_test, y_test = extract_flat_features(test_graphs)
+
+    idx = list(range(test_start, len(all_graphs))) if snap_idx is None else list(snap_idx)
+    graphs = [all_graphs[i] for i in idx]
+    X, y = extract_flat_features(graphs)
 
     if model_name == "coxph":
         import pandas as pd
-        feat_cols = [f"x{i}" for i in range(X_test.shape[1])]
-        df = pd.DataFrame(X_test, columns=feat_cols)
+        feat_cols = [f"x{i}" for i in range(X.shape[1])]
+        df = pd.DataFrame(X, columns=feat_cols)
         df["T"] = 1
-        df["E"] = y_test.astype(int)
-        # Partial hazard as risk score (higher = more risk)
-        scores = model_name and tabular_model.predict_partial_hazard(df).values
+        df["E"] = y.astype(int)
+        scores = tabular_model.predict_partial_hazard(df).values
     else:
-        scores = tabular_model.predict_proba(X_test)[:, 1]
+        scores = tabular_model.predict_proba(X)[:, 1]
 
-    # Package into per-snapshot list matching run_inference output format
-    firm_data: Dict = {}
-    offset = 0
+    firm_data: Dict = defaultdict(lambda: {'probs': [], 'label': 0,
+                                           'event_snap': None, 'snap_ts': None,
+                                           'degree': 0, 'corp_edges': 0})
     results = []
-    for g in test_graphs:
+    offset = 0
+    for i_g, g in zip(idx, graphs):
         n = g["company"].x.shape[0]
         snap_scores = scores[offset: offset + n]
-        snap_labels = y_test[offset: offset + n]
+        snap_labels = y[offset: offset + n]
+        cids = g["company"].company_ids.cpu().numpy()
+        snap_t = getattr(g["company"], 't', None)
+        for j, cid in enumerate(cids.tolist()):
+            firm_data[cid]['probs'].append((i_g, float(snap_scores[j])))
+            firm_data[cid]['label'] = max(firm_data[cid]['label'], int(snap_labels[j]))
+            if int(snap_labels[j]) == 1 and firm_data[cid]['event_snap'] is None:
+                firm_data[cid]['event_snap'] = i_g
+                firm_data[cid]['snap_ts'] = snap_t
         results.append({"scores": snap_scores, "labels": snap_labels})
         offset += n
-    return firm_data, results
+    return dict(firm_data), results
 
 
 def run_inference(
@@ -286,6 +299,7 @@ def run_inference(
     all_graphs, seq_cache, test_start: int,
     device: torch.device,
     freq: str = "W",
+    snap_idx=None,
 ) -> Tuple[Dict, List]:
     """
     Run model on all test snapshots, returning per-firm predictions.
@@ -334,9 +348,12 @@ def run_inference(
         return 1.0 - torch.exp(log_st[:, -1])
 
     with torch.no_grad():
-        n_test = len(all_graphs) - test_start
-        for k in range(n_test):
-            i_g = test_start + k
+        # snap_idx lets the caller extend scoring BEFORE the test boundary. The
+        # default-date anchor needs a full window of lookback, and for a firm
+        # defaulting early in the test window that lookback starts before it. Without
+        # this the firm cannot be detected by any rule and the metric ceiling drops.
+        _idx = list(range(test_start, len(all_graphs))) if snap_idx is None else list(snap_idx)
+        for i_g in _idx:
             g   = all_graphs[i_g].to(device)
             seq = seq_cache[i_g].to(device)
 
@@ -407,6 +424,24 @@ def run_inference(
 # Table builders
 # -----------------------------------------------------------------------
 
+
+def _probs_labels(results):
+    """(probs, labels) from either inference shape.
+
+    run_inference yields tuples (probs, labels, phi, snap_t, cids); the tabular
+    path yields dicts {"scores": ..., "labels": ...}. Table rows are built from
+    both, so normalise here rather than at every call site.
+    """
+    if not results:
+        return np.array([]), np.array([])
+    r0 = results[0]
+    if isinstance(r0, dict):
+        return (np.concatenate([np.asarray(r["scores"]) for r in results]),
+                np.concatenate([np.asarray(r["labels"]) for r in results]))
+    return (np.concatenate([r[0] for r in results]),
+            np.concatenate([r[1] for r in results]))
+
+
 def compute_table1_row(model_name, predictions_runs, anchors, defaulters,
                        capacity=CAPACITY_DEFAULT, protocol="capacity"):
     """One detection-table row: ranking quality plus detection at a stated budget.
@@ -420,14 +455,17 @@ def compute_table1_row(model_name, predictions_runs, anchors, defaulters,
     all_probs, all_labels = [], []
 
     for fd, results in predictions_runs:
-        probs_ = np.concatenate([r[0] for r in results])
-        labels_ = np.concatenate([r[1] for r in results])
+        probs_, labels_ = _probs_labels(results)
         all_probs.append(probs_)
         all_labels.append(labels_)
         ap_per_run.append(compute_metrics(labels_, probs_).get("ap", float("nan")))
 
         scores = build_scores(fd)
         vals = np.asarray(list(scores.values()), dtype=float)
+        if vals.size == 0:
+            # No per-firm score series: detection is undefined for this model.
+            # Skip rather than emit a nan row that reads like a measurement.
+            continue
         if protocol == "capacity":
             thr = _det.capacity_threshold(vals, capacity)
         else:
@@ -463,6 +501,8 @@ def compute_capacity_curve(predictions_runs_by_model, anchors, defaulters):
             for fd, _ in runs:
                 scores = build_scores(fd)
                 vals = np.asarray(list(scores.values()), dtype=float)
+                if vals.size == 0:
+                    continue
                 thr = _det.capacity_threshold(vals, cap)
                 r = _det.detection_rate(scores, anchors, defaulters, thr,
                                         window=WINDOW_WEEKS)
@@ -508,6 +548,8 @@ def compute_regime_table(predictions_runs_by_model, all_graphs, test_snap_idx):
         for period_name, (p_start, p_end) in periods:
             aps, bases = [], []
             for _fd, results in runs:
+                if results and isinstance(results[0], dict):
+                    continue          # tabular path carries no per-snapshot timestamp
                 pr, lb = [], []
                 for probs_np, labels_np, _phi, snap_t, _cids in results:
                     if snap_t is None:
@@ -709,6 +751,18 @@ def main():
     print("  Done.")
 
     # ----------------------------------------------------------------
+    # Anchors first: they decide how far back scoring has to reach.
+    # ----------------------------------------------------------------
+    test_snap_idx = list(range(test_start, len(all_graphs)))
+    anchors, defaulters = build_anchors(all_graphs, test_snap_idx,
+                                        args.data, args.anchor)
+    score_idx = _det.score_range(anchors, test_snap_idx, window=WINDOW_WEEKS)
+    print(f"\nAnchor: {args.anchor}   defaulters in test window: {len(defaulters)}")
+    print(f"Scoring {len(score_idx)} snapshots "
+          f"({len(score_idx) - len(test_snap_idx)} before the test boundary, so every "
+          f"anchor has a full {WINDOW_WEEKS}-week lookback).")
+
+    # ----------------------------------------------------------------
     # Load all checkpoints (.pt for DL models, .pkl for tabular/survival)
     # ----------------------------------------------------------------
     ckpt_dir = args.checkpoints
@@ -728,7 +782,8 @@ def main():
         model.eval()
 
         fd, results = run_inference(
-            model, all_graphs, seq_cache, test_start, device, args.freq
+            model, all_graphs, seq_cache, test_start, device, args.freq,
+            snap_idx=score_idx,
         )
         model_name = ckpt["model_name"]
         predictions_runs_by_model[model_name].append((fd, results))
@@ -743,19 +798,14 @@ def main():
         # Derive model name from filename (e.g. xgb_seed42.pkl -> xgb)
         model_name = fname.split("_seed")[0].replace(".pkl", "")
         fd, results = run_tabular_inference(
-            tabular_model, model_name, all_graphs, test_start
+            tabular_model, model_name, all_graphs, test_start, snap_idx=score_idx
         )
         predictions_runs_by_model[model_name].append((fd, results))
         print(f"    {model_name}  (tabular)")
 
     # ----------------------------------------------------------------
-    # Event anchors: the choice that decides what a detection rate means
+    # What the metric can reach at all, before any model is compared
     # ----------------------------------------------------------------
-    test_snap_idx = list(range(test_start, len(all_graphs)))
-    anchors, defaulters = build_anchors(all_graphs, test_snap_idx,
-                                        args.data, args.anchor)
-    print(f"\nAnchor: {args.anchor}   defaulters in test window: {len(defaulters)}")
-
     n_reach, n_def = report_metric_ceiling(predictions_runs_by_model,
                                            anchors, defaulters)
     print(f"Metric ceiling: {n_reach} of {n_def} defaulters are reachable by ANY rule "
@@ -854,6 +904,8 @@ def main():
             aps.append(compute_metrics(labels_, probs_).get("ap", float("nan")))
             scores = build_scores(fd)
             vals = np.asarray(list(scores.values()), dtype=float)
+            if vals.size == 0:
+                continue
             thr = _det.capacity_threshold(vals, capacity)
             drs.append(_det.detection_rate(scores, anchors, defaulters, thr,
                                            window=WINDOW_WEEKS)["dr_pct"])

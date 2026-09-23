@@ -62,6 +62,11 @@ CAPACITY_DEFAULT = 0.015      # 1.5% of live firms per week
 CAPACITY_CURVE = (0.0025, 0.015, 0.03, 0.05, 0.10)
 WINDOW_WEEKS = 52             # confirmation window, matches the label horizon
 
+# The models the paper reports. train.py can still build rgcn / gatv2 / ndr / coxph,
+# but they were not re-derived under the corrected protocol, so they are excluded from
+# every released table rather than appearing in outputs the paper does not discuss.
+REPORTED_MODELS = ("lstm", "stgnn", "saf", "grs", "xgb", "lgbm")
+
 
 def load_default_dates(data_root: str) -> Dict[str, list]:
     """{gvkey: [default_date, ...]} from the Compustat/S&P default record."""
@@ -496,6 +501,8 @@ def compute_capacity_curve(predictions_runs_by_model, anchors, defaulters):
     """
     rows = []
     for model_name, runs in sorted(predictions_runs_by_model.items()):
+        if model_name not in REPORTED_MODELS:
+            continue        # rgcn / gatv2 / ndr / coxph are not reported in the paper
         for cap in CAPACITY_CURVE:
             dr, ltm = [], []
             for fd, _ in runs:
@@ -545,6 +552,8 @@ def compute_regime_table(predictions_runs_by_model, all_graphs, test_snap_idx):
                ("Post-COVID 2022-24", PERIOD_POSTCOVID)]
     rows = []
     for model_name, runs in sorted(predictions_runs_by_model.items()):
+        if model_name not in REPORTED_MODELS:
+            continue
         for period_name, (p_start, p_end) in periods:
             aps, bases = [], []
             for _fd, results in runs:
@@ -820,7 +829,7 @@ def main():
     print(f"\n--- Detection at {100*args.capacity:.2f}% weekly capacity "
           f"(protocol={args.protocol}) ---")
     t1_rows = []
-    for model_name in ("lstm", "stgnn", "saf", "grs", "xgb", "lgbm"):
+    for model_name in REPORTED_MODELS:
         if model_name not in predictions_runs_by_model:
             continue
         row = compute_table1_row(model_name, predictions_runs_by_model[model_name],

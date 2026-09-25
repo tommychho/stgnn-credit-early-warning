@@ -119,15 +119,20 @@ def score_range(anchors: Dict[int, int], test_snap_idx: Sequence[int],
 # Persistence rule
 # ---------------------------------------------------------------------------
 
-def first_detection_lt(firm_scores: Dict[int, float], anchor: int, thr: float,
+def first_detection_lt(firm_scores: Dict[int, float], anchor: int, thr,
                        window: int = DEFAULT_WINDOW) -> int:
     """Weeks from first confirmed detection to ``anchor``; 0 if never detected.
 
     Detection requires TWO CONSECUTIVE snapshots above ``thr`` inside
     ``[anchor - window, anchor)``. This is the paper's "double-lock" trigger.
+
+    ``thr`` is either a float (one threshold for the window, the pooled arm) or a dict mapping
+    snapshot index to threshold (the per-week rule). Both are accepted so that switching rules
+    is a parameter change rather than a second implementation.
     """
     lo = anchor - window
-    cands = sorted(si for si, p in firm_scores.items() if lo <= si < anchor and p >= thr)
+    at = (lambda si: thr.get(si, float("inf"))) if isinstance(thr, dict) else (lambda si: thr)
+    cands = sorted(si for si, p in firm_scores.items() if lo <= si < anchor and p >= at(si))
     for i in range(len(cands) - 1):
         if cands[i + 1] == cands[i] + 1:
             return max(0, anchor - cands[i])
@@ -142,7 +147,7 @@ def _by_firm(scores: Dict[Tuple[int, int], float]) -> Dict[int, Dict[int, float]
 
 
 def detection_rate(scores: Dict[Tuple[int, int], float], anchors: Dict[int, int],
-                   defaulters: Iterable[int], thr: float,
+                   defaulters: Iterable[int], thr,
                    window: int = DEFAULT_WINDOW) -> Dict[str, float]:
     """DR and lead time.
 
@@ -189,14 +194,41 @@ def reachable_defaulters(scores: Dict[Tuple[int, int], float], anchors: Dict[int
 # Thresholds
 # ---------------------------------------------------------------------------
 
-def capacity_threshold(values: np.ndarray, capacity: float) -> float:
-    """Threshold alerting on exactly ``capacity`` of observations (e.g. 0.015 = 1.5%).
+def per_week_threshold(scores: Dict[Tuple[int, int], float],
+                       capacity: float) -> Dict[int, float]:
+    """PRIMARY RULE. A threshold per snapshot, alerting ceil(capacity * n_t) names in week t.
 
-    Preferred over a recall target: it fixes the REVIEW BUDGET, which is the constraint a
-    credit function actually faces, and it is well defined whatever shape the score
-    distribution has. A recall target fixes recall and lets the alert rate float, so DR
-    comparisons across models silently become comparisons of how indiscriminately each
-    one alerts.
+    This is the standard top-k cross-section applied per week. It fixes the number of files
+    opened in every week, which is what a review budget actually constrains.
+
+    Why not the pooled quantile (``capacity_threshold`` below). A quantile taken over the whole
+    evaluation window fixes the share of firm-weeks alerted ON AVERAGE and lets the weekly load
+    float. On the paper's panel that rule averages the intended 14.4 names a week with a standard
+    deviation of 12.1, a range of 0 to 59, and a lag-1 autocorrelation of +0.993: the load moves
+    in year-long regimes, one 52-week stretch averaging 33 names a week against 4.6 for another.
+    That is the same defect as a recall target, one level down, so the pooled form is reported
+    only as a sensitivity arm.
+
+    Exact ties at the cut are broken arbitrarily.
+    """
+    by_snap: Dict[int, list] = {}
+    for (_, si), p in scores.items():
+        by_snap.setdefault(si, []).append(p)
+    out: Dict[int, float] = {}
+    for si, vals in by_snap.items():
+        arr = np.asarray(vals)
+        k = int(np.ceil(capacity * arr.size))
+        out[si] = float(np.partition(arr, -k)[-k]) if 0 < k <= arr.size else float("inf")
+    return out
+
+
+def capacity_threshold(values: np.ndarray, capacity: float) -> float:
+    """SENSITIVITY ARM. One threshold for the whole window, at the ``(1 - capacity)`` quantile.
+
+    Fixes the share of firm-weeks alerted on average, not the weekly count; see
+    ``per_week_threshold`` for why that distinction is material. Still preferable to a recall
+    target, which fixes recall and lets the alert rate float, so that DR comparisons across
+    models silently become comparisons of how indiscriminately each one alerts.
     """
     return float(np.quantile(np.asarray(values), 1.0 - capacity))
 

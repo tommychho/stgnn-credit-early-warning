@@ -157,14 +157,20 @@ class NoGraphWrapper(nn.Module):
 
     NOTE ON INTERPRETATION. An earlier version of this docstring read the gap
     between this ablation and the full model as evidence that the graph was
-    necessary. It is not, on the checkpoints reported in the paper: the
-    message-passing branch never trained, so the gap measured the optimiser
-    rather than the graph (see `audit_checkpoint.py`). Masking edges at inference
-    is also the weaker of the two available tests, because a branch that
-    contributes nothing is invariant to what is fed into it, and so cannot
-    distinguish "the model internalised the graph" from "the model cannot see the
-    graph at all". The path ablation, zeroing the convolutions outright,
-    separates them; this wrapper does not.
+    necessary. It is not: on the checkpoints reported in the paper, removing every
+    graph-derived path from a trained model changes average precision by
+    -0.0014 +- 0.0202, and this wrapper, trained with edges empty throughout,
+    reaches the highest AP of the four variants. Masking edges at inference is
+    also the weaker of the two available tests, because a branch whose
+    contribution is redundant is nearly invariant to what is fed into it, and so
+    cannot distinguish "the model internalised the graph" from "the model does not
+    need it". Removing each path from the trained checkpoint separates them; this
+    wrapper does not.
+
+    Note that this wrapper is also the control for a DIFFERENT question. Because
+    it is built before training, a model trained through it never sees an edge in
+    any forward pass, which is what tests whether the graph shaped the gates
+    during training, as distinct from propagating at inference.
     """
     def __init__(self, model: SpatioTemporalGNN):
         super().__init__()

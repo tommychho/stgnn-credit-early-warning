@@ -25,8 +25,11 @@ A third signature is independent of both: the LayerNorm scale immediately downst
 the branch. It initialises to exactly 1.0, and if it trains to 0.0000 it annihilates the
 block output regardless of what the convolution produces.
 
-The path ablation quoted in the paper, zeroing the convolutions and re-scoring, needs
-the evaluation data and therefore runs through `evaluate.py` rather than here.
+WHAT THIS SCRIPT CANNOT TELL YOU. These are statements about the optimiser, not about what a
+component contributes. A checkpoint at 0.0% denormal still moves average precision by +0.0404
+when its convolutions are zeroed, so a branch can be heavily decayed and still carry signal,
+and one that looks healthy can carry none. Contribution is settled only by removing the
+component and re-scoring: run `component_audit.py`, which needs the evaluation data.
 """
 
 import argparse

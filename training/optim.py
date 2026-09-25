@@ -21,18 +21,24 @@ Measured on the ST-GNN + GRS checkpoints:
 parameter group              at init         after training
 ===========================  ==============  =================================
 LayerNorm gamma              exactly 1.0     rms 0.0018-0.0050, 58-62% denormal
-GATv2 convolutions           std/init 1.0    std/init 0.0000, 98.9% denormal
+GATv2 convolutions           std/init 1.0    0.0% to 99.8% denormal by seed
 proj (h_init, unnormalised)  std/init 1.0    std/init 0.30
 ===========================  ==============  =================================
 
-The gamma collapse zeroes the message-passing branch output regardless of what the
-convolutions hold; the convolutions, starved of gradient in consequence, decay to
-denormal. Zeroing every convolution in a trained checkpoint then changes average
-precision by +0.0000 with a Spearman correlation of +1.0000: the graph pathway is inert
-at inference.
+The gamma collapse attenuates the message-passing branch output regardless of what the
+convolutions hold, and the convolutions, starved of gradient in consequence, decay toward
+denormal. The same decay reaches biases, so every sigmoid gate in the architecture ends at
+the constant sigma(0) = 0.5.
 
-``audit_checkpoint.py`` in the repository root checks a saved model for this, needing
-neither data nor a GPU. Run it before trusting any ablation that involves a branch.
+WHAT THIS DOES AND DOES NOT TELL YOU. These are statements about the optimiser, not about
+what a component contributes. Zeroing the convolutions in a checkpoint at 0.0% denormal
+still moves average precision by +0.0404, so a branch can be heavily decayed and still
+carry signal. Contribution is settled only by removing the component and re-scoring; the
+paper reports that four of the model's five components fail that test.
+
+``audit_checkpoint.py`` in the repository root reports these parameter statistics for a
+saved model, needing neither data nor a GPU. Read it as a diagnosis of training dynamics,
+and do not substitute it for an ablation.
 """
 
 from typing import Iterable, List, Tuple

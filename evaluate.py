@@ -9,8 +9,9 @@ then outputs:
     outputs/figures/lt_survival.pdf             lead-time survival curve
 
 Two protocol choices are explicit flags, because both decide what a detection rate
-means: --protocol {capacity,recall} and --anchor {default,label_onset}. The defaults
-reproduce the paper; the alternatives reproduce the superseded protocol.
+means: --protocol {per_week,pooled,recall} and --anchor {default,label_onset}. The defaults
+reproduce the paper's primary tables; the alternatives reproduce the sensitivity arm and the
+superseded protocol.
 
 Usage:
     python evaluate.py --checkpoints outputs/models --output outputs
@@ -45,13 +46,16 @@ from training.trainer import TemporalTrainer, build_sequence_tensor, T_LOOKBACK
 # Two choices decide what a detection rate means, and both are set here rather
 # than left implicit.
 #
-#   1. The THRESHOLD is indexed to review capacity, not to a recall target.
-#      For a budget c, the operating threshold is the (1-c) quantile of the
-#      pooled score distribution over the evaluation window, so alerts consume
-#      c of firm-weeks on average and the budget is identical across models.
-#      Thresholding to a fixed recall target instead leaves the alert rate free:
-#      on this panel a uniform random scorer reaches 47.6% detection under that
-#      rule. Pass --protocol recall to reproduce that result.
+#   1. The THRESHOLD is indexed to review capacity, not to a recall target, and
+#      it is taken WEEK BY WEEK. For a budget c, the top ceil(c*n_t) of the n_t
+#      firms live in week t are alerted, so the number of files opened is the
+#      same every week. Taking one quantile over the pooled window instead fixes
+#      the share of firm-weeks only on average: on this panel that averages the
+#      intended 14.4 names a week but with a standard deviation of 12.1, a range
+#      of 0 to 59 and a lag-1 autocorrelation of +0.993. Pass --protocol pooled
+#      for that sensitivity arm. Thresholding to a fixed recall target leaves the
+#      alert rate free altogether: a uniform random scorer reaches 47.6% detection
+#      under that rule. Pass --protocol recall to reproduce it.
 #
 #   2. The EVENT is anchored on the firm's default date, not on the first
 #      snapshot where the horizon label turns on. Label-onset anchoring is
@@ -59,6 +63,21 @@ from training.trainer import TemporalTrainer, build_sequence_tensor, T_LOOKBACK
 #      lookback to score, capping achievable detection at 50%. Pass
 #      --anchor label_onset to reproduce that.
 CAPACITY_DEFAULT = 0.015      # 1.5% of live firms per week
+
+
+def _threshold(scores, vals, capacity, protocol, labels_=None, probs_=None):
+    """The operating threshold under the chosen rule.
+
+    per_week (default, the paper's primary rule) returns a dict of snapshot -> threshold, so
+    exactly ceil(capacity * n_t) names alert in week t. pooled returns one float for the whole
+    window, which fixes the share of firm-weeks alerted only on average. recall returns the
+    superseded fixed-recall threshold. All three are accepted by eval.detection.
+    """
+    if protocol == "per_week":
+        return _det.per_week_threshold(scores, capacity)
+    if protocol == "pooled":
+        return _det.capacity_threshold(vals, capacity)
+    return _det.recall_threshold(labels_, probs_, target=0.50)
 CAPACITY_CURVE = (0.0025, 0.015, 0.03, 0.05, 0.10)
 WINDOW_WEEKS = 52             # confirmation window, matches the label horizon
 
@@ -471,10 +490,7 @@ def compute_table1_row(model_name, predictions_runs, anchors, defaulters,
             # No per-firm score series: detection is undefined for this model.
             # Skip rather than emit a nan row that reads like a measurement.
             continue
-        if protocol == "capacity":
-            thr = _det.capacity_threshold(vals, capacity)
-        else:
-            thr = _det.recall_threshold(labels_, probs_, target=0.50)
+        thr = _threshold(scores, vals, capacity, protocol, labels_, probs_)
         r = _det.detection_rate(scores, anchors, defaulters, thr, window=WINDOW_WEEKS)
         dr_per_run.append(r["dr_pct"])
         ltm_per_run.append(r["lt_mean"])
@@ -510,7 +526,7 @@ def compute_capacity_curve(predictions_runs_by_model, anchors, defaulters):
                 vals = np.asarray(list(scores.values()), dtype=float)
                 if vals.size == 0:
                     continue
-                thr = _det.capacity_threshold(vals, cap)
+                thr = _threshold(scores, vals, cap, "per_week")
                 r = _det.detection_rate(scores, anchors, defaulters, thr,
                                         window=WINDOW_WEEKS)
                 dr.append(r["dr_pct"])
@@ -656,7 +672,7 @@ def plot_lt_survival(predictions_runs_by_model, anchors, output_path):
         fd, _ = predictions_runs_by_model[model_name][0]
         scores = build_scores(fd)
         vals = np.asarray(list(scores.values()), dtype=float)
-        thr = _det.capacity_threshold(vals, CAPACITY_DEFAULT)
+        thr = _threshold(scores, vals, CAPACITY_DEFAULT, "per_week")
         confirmed = {}
         for fid in fd:
             if fid in anchors:
@@ -712,11 +728,20 @@ def main():
     parser.add_argument("--capacity", type=float, default=CAPACITY_DEFAULT,
                         help="Weekly review budget as a fraction of live firms "
                              "(default 0.015 = 1.5%%)")
-    parser.add_argument("--protocol", choices=["capacity", "recall"],
-                        default="capacity",
-                        help="capacity: threshold at the (1-c) quantile of pooled "
-                             "scores (paper). recall: fixed 50%% recall target, which "
-                             "leaves the alert rate free and is the superseded rule.")
+    parser.add_argument("--protocol", choices=["per_week", "pooled", "recall"],
+                        default="per_week",
+                        help="per_week (default, the paper's primary rule): alert the top "
+                             "ceil(c*n_t) names each week, so the weekly workload is fixed. "
+                             "pooled: one (1-c) quantile for the whole window, which fixes the "
+                             "share of firm-weeks only on average and lets the weekly load run "
+                             "from 0 to 59 names on this panel. recall: fixed 50%% recall "
+                             "target, the superseded rule, under which a random scorer reaches "
+                             "47.6%% detection.")
+    parser.add_argument("--random-baseline", action="store_true",
+                        help="Also score a uniform random scorer under the chosen protocol. "
+                             "Under --protocol recall it reaches 47.6%% detection on this "
+                             "panel, which is the paper's Finding 1: a metric a random "
+                             "baseline can match is measuring alert volume.")
     parser.add_argument("--anchor", choices=["default", "label_onset"],
                         default="default",
                         help="default: anchor detection on the firm's default date "
@@ -842,6 +867,25 @@ def main():
               f"  LT mean={row['lt_mean']}w  median={row['lt_median']}w"
               f"  ({n_seeds} seeds)")
 
+    if args.random_baseline:
+        # Same keys, same anchors, same rule: only the scores are replaced by noise. Reported
+        # next to the trained models so the comparison is like for like.
+        rng = np.random.default_rng(42)
+        any_model = next(iter(predictions_runs_by_model.values()))
+        fd0, _ = any_model[0]
+        sc0 = build_scores(fd0)
+        rand = {k: float(rng.random()) for k in sc0}
+        vals = np.asarray(list(rand.values()), dtype=float)
+        labels_r = np.array([1 if k[0] in set(defaulters) else 0 for k in rand])
+        thr_r = _threshold(rand, vals, args.capacity, args.protocol,
+                           labels_r, vals)
+        r_rand = _det.detection_rate(rand, anchors, defaulters, thr_r,
+                                     window=WINDOW_WEEKS)
+        print(f"\n  RANDOM BASELINE ({args.protocol}): DR {r_rand['dr_pct']:.1f}%  "
+              f"LT mean {r_rand['lt_mean']:.1f}w  over {r_rand['n_defaulters']} defaulters")
+        t1_rows.append({"model": "uniform random", "dr_pct": r_rand["dr_pct"],
+                        "lt_mean": r_rand["lt_mean"], "lt_median": r_rand["lt_median"]})
+
     t1_path = os.path.join(args.output, "results", "detection_at_capacity.csv")
     pd.DataFrame(t1_rows).to_csv(t1_path, index=False)
     print(f"  Saved: {t1_path}")
@@ -915,7 +959,7 @@ def main():
             vals = np.asarray(list(scores.values()), dtype=float)
             if vals.size == 0:
                 continue
-            thr = _det.capacity_threshold(vals, capacity)
+            thr = _threshold(scores, vals, capacity, "per_week")
             drs.append(_det.detection_rate(scores, anchors, defaulters, thr,
                                            window=WINDOW_WEEKS)["dr_pct"])
         return np.array(aps), np.array(drs)

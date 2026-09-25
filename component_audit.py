@@ -6,7 +6,7 @@ inside a single checkpoint: same weights, same data, only the component changes,
 comparator for these deltas is their own spread rather than the run-to-run spread across
 independently trained models.
 
-    python component_audit.py --checkpoints outputs/models --data ./data/processed/raw/
+    python component_audit.py --checkpoints outputs/models --data data/processed
 
 WHY THIS EXISTS, AND WHY IT IS NOT audit_checkpoint.py. Parameter norms diagnose the optimiser,
 not the contribution. A checkpoint whose convolutions are 0.0% denormal still moves average
@@ -133,7 +133,8 @@ def _summarise(rows, key):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--checkpoints", default="outputs/models")
-    ap.add_argument("--data", default="./data/processed/raw/")
+    # base_dir, NOT the raw/ directory: GraphDataLoader appends "raw/" itself.
+    ap.add_argument("--data", default="data/processed")
     ap.add_argument("--cache", default="outputs/graph_cache.pkl")
     ap.add_argument("--output", default="outputs")
     ap.add_argument("--freq", default="W")
@@ -159,8 +160,15 @@ def main():
                  for i in range(len(all_graphs))]
     test_snap_idx = list(range(test_start, len(all_graphs)))
     anchors, defaulters = build_anchors(all_graphs, test_snap_idx, args.data, args.anchor)
+    # Score the EXTENDED range, not just the test window. On the default-date anchor a
+    # defaulter early in the window needs a full lookback to be reachable at all; scoring
+    # from test_start alone silently starves those firms and caps detection. This is the
+    # same range evaluate.py uses, for the same reason.
+    score_idx = _det.score_range(anchors, test_snap_idx, window=WINDOW_WEEKS)
     print(f"{len(test_snap_idx)} test snapshots, {len(defaulters)} defaulters, "
-          f"anchor={args.anchor}\n")
+          f"anchor={args.anchor}")
+    print(f"Scoring {len(score_idx)} snapshots "
+          f"({len(score_idx) - len(test_snap_idx)} before the test boundary)\n")
 
     comp_rows, path_rows = [], []
     ckpts = sorted(f for f in os.listdir(args.checkpoints) if f.endswith(".pt"))
@@ -172,7 +180,7 @@ def main():
             continue   # the graph variants are the ones with components to audit
         base = rebuild_model(ck).to(device)
         sc0, p0, y0 = _score(base, all_graphs, seq_cache, test_start, device,
-                             args.freq, test_snap_idx)
+                             args.freq, score_idx)
         ap0 = float(average_precision_score(y0, p0)) if y0.size else float("nan")
         keys = sorted(sc0)
         a0 = np.array([sc0[k] for k in keys])
@@ -185,11 +193,11 @@ def main():
                 if n == 0:
                     continue        # component absent from this variant
             else:
-                g = _gate_time_mean(m, seq_cache, test_snap_idx, device)
+                g = _gate_time_mean(m, seq_cache, score_idx, device)
                 _inner(m).macro_gate = _FrozenGate(g.clone())
                 n = int(g.numel())
             sc, p, y = _score(m, all_graphs, seq_cache, test_start, device,
-                              args.freq, test_snap_idx)
+                              args.freq, score_idx)
             apx = float(average_precision_score(y, p)) if y.size else float("nan")
             rho = float(spearmanr(a0, np.array([sc[k] for k in keys])).correlation)
             comp_rows.append(dict(checkpoint=fn, model=name, component=label, how=how,
@@ -204,7 +212,7 @@ def main():
             if _zero(m, pats) == 0:
                 continue
             sc, p, y = _score(m, all_graphs, seq_cache, test_start, device,
-                              args.freq, test_snap_idx)
+                              args.freq, score_idx)
             apx = float(average_precision_score(y, p)) if y.size else float("nan")
             thr = _threshold(sc, np.asarray(list(sc.values())), args.capacity, "per_week")
             dr = _det.detection_rate(sc, anchors, defaulters, thr,

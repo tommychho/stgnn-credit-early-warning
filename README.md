@@ -165,7 +165,7 @@ python evaluate.py --checkpoints outputs/models --protocol recall --random-basel
 ### Step 3: audit the components
 
 ```bash
-python component_audit.py --checkpoints outputs/models --data ./data/processed/raw/
+python component_audit.py --checkpoints outputs/models --data data/processed
 ```
 
 Removes each component from a trained checkpoint and re-scores, which is what settles whether it

@@ -55,8 +55,15 @@ GNN_LAYERS = 2
 DROPOUT    = 0.3
 LR         = 5e-4
 WD         = 1e-3
-PATIENCE   = 15
-EPOCHS     = 100
+# Training budget, matched to nb03 [Cell 12sC], which trained the checkpoints the paper
+# reports (PUB_E, PUB_P = 150, 20). This is not a free parameter here. The paper states the
+# arms stopped between 21 and 150 epochs, which a 100 cap makes impossible, and §IV-D notes
+# that effective training budget is confounded with variant (epoch count correlates with
+# test AP at r=0.614). The component audit is also cumulative in the budget: decay needs
+# enough epochs to drive gate biases to zero and underflow the convolutional blocks, so a
+# shorter run can leave alive what the paper reports as dead.
+PATIENCE   = 20
+EPOCHS     = 150
 T_Q        = 12      # quarterly lookback (3 years)
 T_W        = 52      # weekly lookback (1 year)
 

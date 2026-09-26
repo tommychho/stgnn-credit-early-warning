@@ -206,7 +206,7 @@ Under `--protocol pooled` the same four report 75.8, 76.1, 79.9 and 79.6 at medi
 
 **Read this table with its caveat.** The spread across the four variants is no wider than their own seed standard deviations, so the ordering is unstable across seeds and no architecture claim rests on it. ST-GNN base falls below the no-graph sequence model under the deployable rule, though that pair is not input-matched: LSTM-only carries a wider trunk and does not receive the Module 3 pool. Gradient boosting on the same features matches the sequential models on the pooled arm and warns three to four weeks earlier.
 
-Seeds are 42, 123 and 456 for every model, with 7, 99, 202, 314, 555, 777 and 1024 added for the ten-seed comparison reported in the paper. Training takes about 90 minutes per seed on an NVIDIA Tesla T4 over the 783 training snapshots.
+Seeds are 42, 123 and 456 for every model, with 7, 99, 202, 314, 555, 777 and 1024 added for the ten-seed comparison reported in the paper. Each run trains for at most 150 epochs with early stopping at patience 20, on plain Adam at lr 5e-4 and weight decay 1e-3, which is the configuration the reported checkpoints used. Budget roughly two hours per seed on an NVIDIA Tesla T4 over the 783 training snapshots. **The epoch budget is not a free parameter**: the convergence findings are cumulative in it, so a shorter run can leave a component alive that the paper reports as contributing nothing.
 
 ## Pre-trained models
 

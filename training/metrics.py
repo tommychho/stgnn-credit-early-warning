@@ -356,21 +356,25 @@ def compute_metrics(
 
     metrics = {}
 
-    # AUC-ROC (threshold-independent)
-    try:
-        metrics[f"{prefix}auc"] = roc_auc_score(y_true_np, y_pred_proba_np)
-    except ValueError:
-        # Handle case where only one class is present
-        metrics[f"{prefix}auc"] = 0.0
+    # AUC-ROC (threshold-independent).
+    # Guarded on the class count rather than on an exception. Older sklearn RAISED
+    # ValueError when y_true held one class; current versions emit UndefinedMetricWarning
+    # and return nan instead, so the old `except ValueError` never fired and every
+    # single-class snapshot printed two warnings. The condition itself is expected: at a
+    # ~1% positive rate a given week often has no positives at the 1q or 2q horizon, so
+    # the metric is undefined for that slice. nan says that; 0.0 would assert a real AUC.
+    _n_pos = int((y_true_np == 1).sum())
+    _n_neg = int((y_true_np == 0).sum())
+    metrics[f"{prefix}auc"] = (float(roc_auc_score(y_true_np, y_pred_proba_np))
+                               if _n_pos >= 1 and _n_neg >= 1 else float("nan"))
 
     # C-index (Harrell's concordance) - equals AUC for binary labels
     metrics[f"{prefix}cindex"] = compute_cindex(y_true_np, y_pred_proba_np)
 
-    # Average Precision (PR-AUC)
-    try:
-        metrics[f"{prefix}ap"] = average_precision_score(y_true_np, y_pred_proba_np)
-    except ValueError:
-        metrics[f"{prefix}ap"] = 0.0
+    # Average Precision (PR-AUC). Same guard as the AUC above: with no positives the
+    # precision-recall curve is undefined and current sklearn warns rather than raising.
+    metrics[f"{prefix}ap"] = (float(average_precision_score(y_true_np, y_pred_proba_np))
+                              if _n_pos >= 1 else float("nan"))
 
     # F1 Score
     metrics[f"{prefix}f1"] = f1_score(y_true_np, y_pred_binary, zero_division=0)

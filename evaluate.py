@@ -87,13 +87,25 @@ WINDOW_WEEKS = 52             # confirmation window, matches the label horizon
 REPORTED_MODELS = ("lstm", "stgnn", "saf", "grs", "xgb", "lgbm")
 
 
-def load_default_dates(data_root: str) -> Dict[str, list]:
-    """{gvkey: [default_date, ...]} from the Compustat/S&P default record."""
+def load_default_dates(data_root: str, since=None) -> Dict[str, "pd.Timestamp"]:
+    """{gvkey: first default date at or after ``since``} from the Compustat/S&P record.
+
+    ``since`` MATTERS. The record spans the whole panel, and a firm that defaulted in the
+    test window may also carry an earlier distress event. Taking its earliest date
+    unconditionally anchors the firm years before the test window, which silently drags the
+    scoring range back over the training data and makes the detection window meaningless for
+    that firm. The caller passes the first test timestamp, so only in-window events anchor.
+
+    gvkey is zero-padded to six characters to match the graph's own representation.
+    """
     path = os.path.join(data_root, "raw", "defaults",
                         "compustat_sp_defaults_fallback.parquet")
     df = pd.read_parquet(path)
+    df["gvkey"] = df["gvkey"].astype(str).str.zfill(6)
     df["default_date"] = pd.to_datetime(df["default_date"])
-    return df.groupby("gvkey")["default_date"].apply(lambda s: sorted(s)[0]).to_dict()
+    if since is not None:
+        df = df[df["default_date"] >= pd.Timestamp(since)]
+    return df.groupby("gvkey")["default_date"].min().to_dict()
 
 
 def build_scores(firm_data: Dict) -> Dict[Tuple[int, int], float]:
@@ -107,14 +119,16 @@ def build_anchors(all_graphs, test_snap_idx, data_root: str, mode: str):
     """Event anchors and the defaulter list, on the corrected or published anchor."""
     if mode == "label_onset":
         return _det.build_event_anchors(all_graphs, test_snap_idx, mode="label_onset")
+    # cid -> gvkey, keyed by the COMPANY ID the graphs use, which is what
+    # build_event_anchors looks up. Zero-padded to match load_default_dates.
     cid_to_gvkey = {}
-    for si in test_snap_idx:
-        g = all_graphs[si]
-        for gvk in g["company"].gvkey:
-            cid_to_gvkey[int(gvk)] = str(gvk)
+    for g in all_graphs:
+        for cid, gvk in zip(g["company"].company_ids.cpu().numpy(), g["company"].gvkey):
+            cid_to_gvkey[int(cid)] = str(gvk).zfill(6)
+    since = all_graphs[min(test_snap_idx)]["company"].t
     return _det.build_event_anchors(
         all_graphs, test_snap_idx, mode="default",
-        gvkey_to_defdate=load_default_dates(data_root),
+        gvkey_to_defdate=load_default_dates(data_root, since=since),
         cid_to_gvkey=cid_to_gvkey,
     )
 

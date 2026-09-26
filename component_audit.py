@@ -57,11 +57,15 @@ import eval.detection as _det
 
 # Components, the pattern that identifies their parameters, and how they are removed.
 # "zero" is valid only where the block enters additively; see the module docstring.
+# The last field is the set of model_names that actually CALL the block. A component whose
+# parameters exist but are never used contributes nothing by construction, and auditing it
+# there would pad the sample with vacuous zeros: `film` is present in every checkpoint but
+# only runs when the model was built with use_saf=True.
 COMPONENTS = [
-    ("convs",       ("gnn.convs", "convs."),      "zero"),
-    ("net_sys",     ("net_sys.",),                "zero"),
-    ("film (SAF)",  ("film.",),                   "zero"),
-    ("macro_gate",  ("macro_gate.",),             "freeze"),
+    ("convs",       ("gnn.convs", "convs."),      "zero",   {"stgnn", "saf", "grs"}),
+    ("net_sys",     ("net_sys.",),                "zero",   {"stgnn", "saf", "grs"}),
+    ("film (SAF)",  ("film.",),                   "zero",   {"saf"}),
+    ("macro_gate",  ("macro_gate.",),             "freeze", {"stgnn", "saf", "grs"}),
 ]
 # The 2x2 of Table IV: the two graph-derived paths, separately and together.
 PATHS = [("convs", ("convs.",)), ("net_sys", ("net_sys.",)),
@@ -186,7 +190,10 @@ def main():
         a0 = np.array([sc0[k] for k in keys])
         print(f"{fn}: AP {ap0:.4f}")
 
-        for label, pats, how in COMPONENTS:
+        for label, pats, how, used_by in COMPONENTS:
+            if name not in used_by:
+                print(f"    {label:<12} skipped: not active in '{name}'")
+                continue
             m = rebuild_model(ck).to(device)
             if how == "zero":
                 n = _zero(m, pats)
@@ -238,7 +245,7 @@ def main():
     print("=" * 92)
     print(f"  {'component':<14}{'mean dAP':>10}{'s.d.':>9}{'neg/n':>8}{'p':>9}"
           f"{'Wilcoxon':>10}{'mean rho':>10}")
-    for label, _, _ in COMPONENTS:
+    for label, _, _, _ in COMPONENTS:
         sub = comp[comp["component"] == label]
         if sub.empty:
             continue

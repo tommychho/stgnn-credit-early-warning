@@ -33,6 +33,7 @@ from statsmodels.stats.contingency_tables import mcnemar
 sys.path.insert(0, os.path.dirname(__file__))
 
 from data.graph_builder import build_temporal_graphs
+from eval.splits import shifted_split
 from eval import detection as _det
 from models.baselines import LSTMOnly, GATv2Only, GATv2NDR, HomogeneousRGCN, NoGraphWrapper
 from models.stgnn import SpatioTemporalGNN
@@ -786,6 +787,20 @@ def main():
                 pickle.dump({"train": train_graphs, "val": val_graphs,
                              "test": test_graphs}, f)
             print(f"  Graph cache saved: {args.cache}")
+
+    # ----------------------------------------------------------------
+    # APPLY THE EMBARGO. build_temporal_graphs (and the cache it writes) returns the
+    # PUBLISHED split: train to 2016-12-31, validation 2017-2019, test from 2020. That
+    # split has no embargo, and because company.y looks 52 weeks forward a validation
+    # window ending where testing begins carries positive labels for firms defaulting
+    # after the boundary: 1,030 of 3,059 validation positives are contaminated that way,
+    # spanning 35 firms. The paper reports the embargoed split, so it is derived here
+    # rather than left to the caller. shifted_split slides validation back one full label
+    # horizon and pays for it out of training, giving 783 / 156 / 261 with 2019 in
+    # neither set. Applied exactly once, immediately after the published split is obtained.
+    _spec = shifted_split(train_graphs + val_graphs + test_graphs,
+                          len(train_graphs), len(val_graphs))
+    train_graphs, val_graphs, test_graphs = _spec.train, _spec.val, _spec.test
     all_graphs = train_graphs + val_graphs + test_graphs
     test_start = len(train_graphs) + len(val_graphs)
     t_lookback = T_W if args.freq == "W" else T_Q

@@ -54,6 +54,7 @@ from evaluate import (CAPACITY_DEFAULT, T_Q, T_W, WINDOW_WEEKS, build_anchors,
                       build_scores, build_sequence_tensor, rebuild_model, run_inference,
                       _threshold)
 import eval.detection as _det
+from eval.splits import shifted_split
 
 # Components, the pattern that identifies their parameters, and how they are removed.
 # "zero" is valid only where the block enters additively; see the module docstring.
@@ -155,6 +156,10 @@ def main():
         train_g, val_g, test_g = c["train"], c["val"], c["test"]
     else:
         train_g, val_g, test_g = build_temporal_graphs(base_dir=args.data, freq=args.freq)
+    # Same embargo as train.py and evaluate.py: the builder and its cache return the
+    # published split, and the paper reports the embargoed one. See train.py for why.
+    _spec = shifted_split(train_g + val_g + test_g, len(train_g), len(val_g))
+    train_g, val_g, test_g = _spec.train, _spec.val, _spec.test
     all_graphs = train_g + val_g + test_g
     test_start = len(train_g) + len(val_g)
     t_lookback = T_W if args.freq == "W" else T_Q

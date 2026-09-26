@@ -358,7 +358,14 @@ def main():
         weight_decay=WD,
         patience=PATIENCE,
         t_lookback=t_lookback,
-        force_binary_loss=(args.freq == "Q"),
+        # OBJECTIVE, matched to nb03's train_variant, which trained the reported
+        # checkpoints. Its survival_loss calls TemporalTrainer._survival_loss on the [N,3]
+        # hazard logits, so head_surv is never trained and evaluate.py scores the 3-bin
+        # head. Leaving this False takes the 52-bin DeepHit branch instead, which trains
+        # head_surv, makes evaluate.py score phi, and drops AP by roughly 0.15 across every
+        # model including the trees. Not a free parameter.
+        force_binary_loss=True,
+        survival_alpha=0.8,          # nb03 survival_loss(..., alpha=0.8)
     )
     trainer.train(num_epochs=args.epochs)
 

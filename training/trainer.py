@@ -174,9 +174,12 @@ class TemporalTrainer:
             model.parameters(), lr=lr, weight_decay=weight_decay
         )
 
-        # Halve LR when val AP stops improving (patience=10 epochs, min_lr=1e-6)
+        # Halve LR when val AP stops improving.
+        # Matched to nb03's train_variant: ReduceLROnPlateau(mode='max', factor=0.5,
+        # patience=5, min_lr=1e-5). A slower scheduler with a lower floor changes how far
+        # weights decay before early stopping, which the component audit is sensitive to.
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='max', factor=0.5, patience=10, min_lr=1e-6
+            self.optimizer, mode='max', factor=0.5, patience=5, min_lr=1e-5
         )
 
         # Per-horizon class weights from training set

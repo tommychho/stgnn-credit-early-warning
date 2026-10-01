@@ -1,0 +1,18 @@
+# Licensed data must never be committed.
+*.parquet
+*.csv
+*.npz
+*.pkl
+data/processed/
+
+# Trained weights are not redistributed (WRDS-licensed training data).
+*.pt
+
+# Run artefacts
+outputs/
+*.log
+
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
